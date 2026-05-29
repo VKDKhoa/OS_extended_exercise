@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-
+#include <errno.h>
 #define MAX (1 << 21) // 2^21 bytes = 2MB
 
 struct framephy_struct{
@@ -45,8 +45,8 @@ void add_frame_worstfit(struct memphy_struct *mram, struct framephy_struct *fram
         return;
     }
 
-    curr_frame = mram->lst_frames;
-    if(curr_frame->next == NULL)
+    curr_frame = mram->lst_frames; //move back to head
+    if(curr_frame->next == NULL) //meaning that is first time to add frame
     {
         frame->start = curr_frame->start;
         frame->next = curr_frame; 
@@ -84,14 +84,21 @@ void add_frame_worstfit(struct memphy_struct *mram, struct framephy_struct *fram
 //first fit: find first hole approriate
 void add_frame_firstfit(struct memphy_struct *mram, struct framephy_struct *frame){
     struct framephy_struct *curr_frame = mram->lst_frames;
-    struct framephy_struct *prev = NULL;
     while(curr_frame != NULL){
-        if(curr_frame->next != NULL && (curr_frame->next->size >= frame->size) && curr_frame->size < frame->size)
-        {
-            prev = curr_frame;
-        }
-        else if(curr_frame->size >= frame->size){
+        //printf("frame [%u:%u], alloc_stat = %c size = %u\n",curr_frame->start,curr_frame->start+curr_frame->size-1,curr_frame->is_allocated,curr_frame->size);
+        if(curr_frame->size >= frame->size && curr_frame->is_allocated == 'H'){
+            //printf("SUIT FRAME ADDRESS[%u:%u]\n",curr_frame->start,curr_frame->size);
             frame->start = curr_frame->start;
+            if(frame->start != 0){
+                struct framephy_struct *link = mram->lst_frames;
+                while(link->next != curr_frame){
+                    link = link->next;
+                }
+                link->next = frame;
+            }
+            else{
+                mram->lst_frames = frame;
+            }
             curr_frame->size -= frame->size;
             if(curr_frame->size > 0)
             {
@@ -103,21 +110,69 @@ void add_frame_firstfit(struct memphy_struct *mram, struct framephy_struct *fram
                 frame->next = curr_frame->next;
                 free(curr_frame->owner);
                 free(curr_frame);
-            }    
-            prev->next = frame;
+            }
+
             return;
         }
         curr_frame = curr_frame->next;
     }
     if(curr_frame == NULL){
         printf("Not enough memory for Process %s size %u\n",frame->owner,frame->size);
+        free(frame->owner);
         free(frame);
     }
 }
 // best fit: find best suitable hole for process
 
 void add_frame_bestfit(struct memphy_struct *mram, struct framephy_struct *frame){
+    struct framephy_struct *curr_frame = mram->lst_frames;
+    struct framephy_struct *best_hole = NULL;
+    uint32_t best_fit = mram->maxsz;
+    while(curr_frame != NULL){
+        if(curr_frame->is_allocated != 'H'){
+            curr_frame = curr_frame->next;
+            continue;
+        }
+        if(curr_frame->size - frame->size > 0 && curr_frame->size - frame->size < best_fit){
+            best_hole = curr_frame;
+        }
+        curr_frame = curr_frame->next;
+    }
+    if(best_hole == NULL){
+        printf("not enough memory\n");
+        return;
+    }
+    curr_frame = mram->lst_frames;
+    while(curr_frame != NULL){
+        if(curr_frame == best_hole){
+            frame->start = curr_frame->start;
+            if(frame->start == 0){
+                mram->lst_frames = frame;
+            }
+            else{
+                struct framephy_struct *link = mram->lst_frames;
+                while(link->next != curr_frame){
+                    link = link->next;
+                }
+                link->next = frame;
+            }
+            curr_frame->size -= frame->size;
+            if(curr_frame->size > 0)
+            {
+                curr_frame->start = frame->start + frame->size;
+                frame->next = curr_frame;
+            }
+            else
+            {
+                frame->next = curr_frame->next;
+                free(curr_frame->owner);
+                free(curr_frame);
+            }
+            return;
 
+        }
+        curr_frame = curr_frame->next;
+    }
 }
 // handling hole
 void merge_hole(struct memphy_struct *mram){
@@ -252,8 +307,10 @@ int main(int argc, char *argv[]){
             struct framephy_struct *new_frame = create_new_frame(atoi(token[2]),'P',token[1]);
             if(strcmp("W",token[3]) == 0)
                 add_frame_worstfit(mram,new_frame);
-            else if(strcmp("F",token[3]) == 0)
+            else if(strcmp("F",token[3]) == 0){
                 add_frame_firstfit(mram,new_frame);
+            }
+                
             else
                 add_frame_bestfit(mram,new_frame);
 
